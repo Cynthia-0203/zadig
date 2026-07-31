@@ -255,7 +255,10 @@ func getHelmServiceValuesDiff(productName, envName, namespace string, prodSvc *m
 		arg.ChartName = render.ChartName
 		arg.ChartVersion = render.ChartVersion
 	}
-	valuesResp, err := GenEstimatedValues(productName, envName, namespace, serviceOrReleaseName, EstimateValuesSceneUpdateService, EstimateContentTypeValues, EstimateValuesResponseFormatYaml, arg, diff.VersionChanged, production, isHelmChartDeploy, "", log)
+	// Keep the service revision unchanged when calculating the Values diff. Service
+	// template changes are reported separately by VersionDiff; upgrading the
+	// revision here would mix changes from the service's values.yaml into ValuesDiff.
+	valuesResp, err := GenEstimatedValues(productName, envName, namespace, serviceOrReleaseName, EstimateValuesSceneUpdateService, EstimateContentTypeValues, EstimateValuesResponseFormatYaml, arg, false, production, isHelmChartDeploy, "", log)
 	if err != nil {
 		return nil, err
 	}
