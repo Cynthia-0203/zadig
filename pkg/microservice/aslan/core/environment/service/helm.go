@@ -187,7 +187,7 @@ func getReleaseStatus(re *release.Release) ReleaseStatus {
 	}
 }
 
-func getHelmServiceDiffSummary(prodSvc *models.ProductService, latestTmplSvc *models.Service) (*HelmServiceDiffSummary, string, bool, error) {
+func getHelmServiceDiffSummary(prodSvc *models.ProductService, latestTmplSvc *models.Service, valuesSourceDiff *HelmValuesSourceDiff) (*HelmServiceDiffSummary, string, bool, error) {
 	summary := &HelmServiceDiffSummary{}
 	if prodSvc == nil {
 		return summary, "", false, nil
@@ -206,6 +206,12 @@ func getHelmServiceDiffSummary(prodSvc *models.ProductService, latestTmplSvc *mo
 
 	sourceValues, hasSource := "", false
 	if hasConfiguredHelmValuesSource(render.OverrideYaml) {
+		// Git content is immutable for a given commit. When the environment and
+		// repository point to the same commit, a stale local YAML snapshot must not
+		// turn a service configuration change into a Values change.
+		if sameHelmValuesSourceCommit(valuesSourceDiff) {
+			return summary, "", false, nil
+		}
 		var err error
 		sourceValues, hasSource, err = commonservice.LoadYamlFromSource(render.OverrideYaml)
 		if err != nil {
@@ -222,6 +228,13 @@ func getHelmServiceDiffSummary(prodSvc *models.ProductService, latestTmplSvc *mo
 
 	summary.HasDiff = summary.VersionChanged || summary.ValuesChanged
 	return summary, sourceValues, hasSource, nil
+}
+
+func sameHelmValuesSourceCommit(diff *HelmValuesSourceDiff) bool {
+	return diff != nil &&
+		diff.CurrentCommit != nil && diff.CurrentCommit.ID != "" &&
+		diff.LatestCommit != nil && diff.LatestCommit.ID != "" &&
+		diff.CurrentCommit.ID == diff.LatestCommit.ID
 }
 
 func parseOverrideValues(valueStr string) ([]*commonservice.KVPair, error) {
@@ -664,7 +677,8 @@ func ListHelmReleaseDiffSummaries(productName, envName string, production bool, 
 				latestTmplSvc = serviceTmplMap[prodSvc.ServiceName]
 			}
 
-			diff, sourceValues, hasSource, diffErr := getHelmServiceDiffSummary(prodSvc, latestTmplSvc)
+			valuesSourceDiff := getHelmValuesSourceDiff(prodSvc.GetServiceRender().OverrideYaml, log)
+			diff, sourceValues, hasSource, diffErr := getHelmServiceDiffSummary(prodSvc, latestTmplSvc, valuesSourceDiff)
 			if diffErr == nil && diff.ValuesChanged {
 				overrideYaml := prodSvc.GetServiceRender().GetOverrideYaml()
 				if hasSource {
@@ -722,7 +736,8 @@ func GetHelmReleaseDiff(productName, envName, serviceOrReleaseName string, produ
 		}
 	}
 
-	diff, sourceValues, hasSource, err := getHelmServiceDiffSummary(prodSvc, latestTmplSvc)
+	valuesSourceDiff := getHelmValuesSourceDiff(prodSvc.GetServiceRender().OverrideYaml, log)
+	diff, sourceValues, hasSource, err := getHelmServiceDiffSummary(prodSvc, latestTmplSvc, valuesSourceDiff)
 	if err != nil {
 		return nil, err
 	}
@@ -732,7 +747,7 @@ func GetHelmReleaseDiff(productName, envName, serviceOrReleaseName string, produ
 		ReleaseName:      prodSvc.ReleaseName,
 		HasDiff:          diff.HasDiff,
 		Diff:             diff,
-		ValuesSourceDiff: getHelmValuesSourceDiff(prodSvc.GetServiceRender().OverrideYaml, log),
+		ValuesSourceDiff: valuesSourceDiff,
 	}
 	if diff.VersionChanged {
 		resp.VersionDiff = &HelmServiceVersionDiff{
